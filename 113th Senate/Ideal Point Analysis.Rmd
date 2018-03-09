@@ -1,0 +1,189 @@
+---
+title: "113th Senate Ideal Points"
+author: "John Spaw"
+date: "3/6/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Using JAGS, we create an \textbf{ideal point model} for the voting preferences of the 113th US Senate given by
+  $$y_{ij} \sim bernoulli(p_{ij}) \qquad probit(p_{ij}) = \alpha_j + \beta_j x_i.$$
+We orient the model by assuming McConnell is to the right of Reid.
+Ideal point estimates are scaled to have mean zero and unit variance. \newline
+  
+
+```{r}
+library("runjags")
+library("readr")
+set.seed(111893)
+
+#Data from http://tahk.us/s113.rda
+#S113
+#sen: info for each senator
+#votes: rows = legislator, columns = bill
+#pres2012: vote breakdown for 2012 presidential election
+load(file = "s113.rda")
+```
+
+```{r}
+#Baisc ideal point model for senator voting preference in JAGS
+model_string <- "model {
+    #Likelihood
+    for(i in 1:n) {
+      for(j in 1:J){
+            y[i,j] ~ dbern(p[i,j])
+            probit(p[i,j]) <- alpha[j] + beta[j]*x[i]
+      }
+    }
+    
+    #Priors
+    for(i in 1:n) {
+      x[i] ~ dnorm(0,1)
+    }
+    
+    for(j in 1:J){
+      alpha[j] ~ dnorm(0,0.01)
+      beta[j] ~ dnorm(0,0.01)
+    }
+  }"
+
+#Define controls for JAGs model fit:
+monitor_string <- c("x")
+jags_data <- list(y = S113$votes, 
+                  n = nrow(S113$votes),
+                  J = ncol(S113$votes))
+```
+
+
+```{r}
+#Fit the basic ideal point model
+#Model fit is saved after simulation is complete since fit takes a long time
+
+#model_run_1 <- run.jags(model = model_string, monitor=monitor_string, 
+#                      data = jags_data, 
+#                      n.chains = 2,
+#                      burnin = 4000,
+#                      adapt = 1000,
+#                      sample = 7500)
+
+#saveRDS(model_run_1, "ideal_point_model_basic.rds")
+```
+
+
+
+```{r}
+#Analysis of first model
+#Load model from RDS file
+model_1 <- readRDS("ideal_point_model_basic.rds")
+
+#Make each iteration (rows) mean 0 var 1 (both chains)
+model_1$mcmc[[1]] <- t(scale(t(model_1$mcmc[[1]])))
+model_1$mcmc[[2]] <- t(scale(t(model_1$mcmc[[2]])))
+
+#verify scaling is correct
+#apply(model_1$mcmc[[1]], 1, mean)
+#apply(model_1$mcmc[[2]], 1, mean)
+
+#Compute mean for each legislator and orient McConnell to the right of Reid
+ideal_points <- apply(model_1$mcmc[[1]], 2, mean)
+ideal_points <- -ideal_points #put McConnell to the right of Reid
+
+#Create dataframe and order on ideal point
+ideal_point_df <- data.frame(rownames(sen), ideal_points, sen$party) 
+ideal_point_df <-  ideal_point_df[order(ideal_point_df$ideal_points),] 
+ideal_point_df$index <- seq(1, length(ideal_points))
+names(ideal_point_df)[3] <- "party"
+
+
+library(ggplot2)
+ggplot(data = ideal_point_df, aes(index, ideal_points)) +
+  geom_point(aes(color=party))
+  #colors are strange
+```
+
+We fit a second, more complex model that accounts for a senator's party
+and the democratic vote share in their state in the 2012 presidential election:
+
+
+```{r}
+#Add components for senator party and democratice vote share in 2012 Presidential Election
+#Senator's party
+sen <- S113$senators
+sen[which(sen$party == "Indep"),] #Sanders and King are independent 
+sen$party[c(38,96)] <- "D" #change independents to democrats ..... King and Sanders caucus with democrats
+party <- ifelse(sen$party == "R", 0 , 1)
+
+#Democratic vote share
+votes <- S113$pres2012
+votes$dem_vote_share <- votes$democratic/votes$total
+sen <- merge(sen, votes, by = "state")
+```
+
+```{r}
+#Define controls for JAGs model fit:
+set.seed(111893)
+library("runjags")
+library("readr")
+
+model_string_2 <- "
+  model {
+    #Likelihood
+    for(i in 1:n) {
+      for(j in 1:J){
+            y[i,j] ~ dbern(p[i,j])
+            probit(p[i,j]) <- alpha[j] + beta[j]*x[i]
+            x[i] <- mu*party[i] + gamma*vote_share[i] + e[i]
+      }
+    }
+  
+    #Priors
+    for(i in 1:n) {
+      e[i] ~ dnorm(0,1)
+    }
+    for(j in 1:J){
+      alpha[j] ~ dnorm(0,0.01)
+      beta[j] ~ dnorm(0,0.01)
+    }
+  
+    mu ~ dnorm(0,0.1)
+    gamma ~ dnorm(0,0.1)
+  }"
+
+
+monitor_string_2 <- c("x")
+jags_data_2 <- list(y = S113$votes, 
+                  n = nrow(S113$votes),
+                  J = ncol(S113$votes),
+                  party = party,
+                  vote_share = sen_new$dem_vote_share)
+```
+
+
+```{r}
+#model_run_2 <- run.jags(model = model_string_2, monitor=monitor_string_2, 
+#                      data = jags_data_2, 
+#                      n.chains = 2,
+#                      burnin = 4000,
+#                      adapt = 1000,
+#                      sample = 7500)
+
+#Compilation error on line 7. Attempt to redefine node x[1]
+#saveRDS(model_run2, "ideal_point_model_2.rds")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
